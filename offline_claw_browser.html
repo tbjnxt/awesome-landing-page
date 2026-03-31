@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>offline-claw</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --tool-bg: #1c2128;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Top bar ── */
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  #topbar .logo { font-weight: 700; color: var(--accent); letter-spacing: -0.5px; }
+  #topbar .sep  { color: var(--border); }
+
+  #model-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #model-custom {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    width: 180px;
+  }
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+  #status-dot.ok   { background: var(--green); }
+  #status-dot.fail { background: var(--red); }
+
+  #status-text { color: var(--muted); font-size: 11px; }
+
+  .spacer { flex: 1; }
+
+  button.icon-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 6px;
+    padding: 3px 8px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    transition: color .15s, border-color .15s;
+  }
+  button.icon-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  /* ── Main layout ── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Chat pane ── */
+  #chat-pane {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+  }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .msg { display: flex; flex-direction: column; gap: 4px; }
+
+  .msg-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .msg-header .role {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+  .msg-header .role.user      { color: var(--accent); }
+  .msg-header .role.assistant { color: var(--green); }
+  .msg-header .role.system    { color: var(--yellow); }
+  .msg-header .ts { color: var(--border); }
+
+  .msg-body {
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .msg-body.user { border-color: #1f3a5f; background: #0d2137; }
+
+  /* ── Tool call blocks ── */
+  .tool-block {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 12px;
+  }
+  .tool-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    background: var(--tool-bg);
+    cursor: pointer;
+    user-select: none;
+  }
+  .tool-name  { color: var(--yellow); font-weight: 600; }
+  .tool-status { margin-left: auto; font-size: 11px; }
+  .tool-status.ok   { color: var(--green); }
+  .tool-status.err  { color: var(--red); }
+  .tool-status.wait { color: var(--muted); }
+
+  .tool-body {
+    padding: 8px 10px;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    display: none;
+  }
+  .tool-body.open { display: block; }
+  .tool-args  { color: var(--muted); margin-bottom: 6px; font-size: 11px; }
+  .tool-out   { color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
+  .tool-out.err { color: var(--red); }
+
+  /* ── Typing indicator ── */
+  .typing { display: flex; gap: 4px; align-items: center; padding: 8px 14px; }
+  .typing span {
+    width: 6px; height: 6px;
+    background: var(--muted);
+    border-radius: 50%;
+    animation: bounce .9s infinite;
+  }
+  .typing span:nth-child(2) { animation-delay: .15s; }
+  .typing span:nth-child(3) { animation-delay: .3s;  }
+  @keyframes bounce {
+    0%,60%,100% { transform: translateY(0); }
+    30%         { transform: translateY(-5px); }
+  }
+
+  /* ── Input bar ── */
+  #input-bar {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  #prompt {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    resize: none;
+    min-height: 44px;
+    max-height: 200px;
+    line-height: 1.5;
+    outline: none;
+    transition: border-color .15s;
+  }
+  #prompt:focus { border-color: var(--accent); }
+  #prompt::placeholder { color: var(--muted); }
+
+  #send-btn {
+    background: var(--accent);
+    color: #0d1117;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    align-self: flex-end;
+    transition: opacity .15s;
+  }
+  #send-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* ── File pane ── */
+  #file-pane {
+    width: 280px;
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  #file-pane-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+
+  #file-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--muted);
+    border-left: 2px solid transparent;
+    transition: background .1s, color .1s;
+  }
+  .file-item:hover { background: var(--bg); color: var(--text); }
+  .file-item.active { border-left-color: var(--accent); color: var(--text); background: var(--bg); }
+  .file-item .file-icon { font-size: 10px; }
+
+  /* ── File editor modal ── */
+  #file-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.6);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #file-modal.open { display: flex; }
+  #file-modal-inner {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    width: min(720px, 96vw);
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #file-modal-header {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    gap: 8px;
+  }
+  #file-modal-path {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    outline: none;
+  }
+  #file-modal-content {
+    flex: 1;
+    background: var(--bg);
+    color: var(--text);
+    border: none;
+    outline: none;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 12px 14px;
+    resize: none;
+    min-height: 300px;
+    line-height: 1.6;
+  }
+  #file-modal-footer {
+    display: flex;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border);
+    justify-content: flex-end;
+  }
+  .modal-btn {
+    padding: 6px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--text);
+    background: var(--surface);
+  }
+  .modal-btn.primary { background: var(--accent); color: #0d1117; border-color: var(--accent); font-weight: 600; }
+  .modal-btn.danger  { background: var(--red);    color: #fff;    border-color: var(--red); }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div id="topbar">
+  <span class="logo">⚡ offline-claw</span>
+  <span class="sep">|</span>
+  <select id="model-select">
+    <option value="qwen2.5-coder:7b">qwen2.5-coder:7b</option>
+    <option value="qwen2.5-coder:14b">qwen2.5-coder:14b</option>
+    <option value="llama3.2:3b">llama3.2:3b</option>
+    <option value="llama3.3:70b">llama3.3:70b</option>
+    <option value="deepseek-coder-v2:16b">deepseek-coder-v2:16b</option>
+    <option value="codellama:13b">codellama:13b</option>
+    <option value="custom">custom…</option>
+  </select>
+  <input id="model-custom" type="text" placeholder="model:tag" style="display:none">
+  <span id="status-dot"></span>
+  <span id="status-text">checking…</span>
+  <span class="spacer"></span>
+  <button class="icon-btn" onclick="newFile()">+ file</button>
+  <button class="icon-btn" onclick="clearHistory()">clear</button>
+</div>
+
+<!-- Main -->
+<div id="main">
+  <!-- Chat -->
+  <div id="chat-pane">
+    <div id="messages"></div>
+    <div id="input-bar">
+      <textarea id="prompt" rows="1" placeholder="Ask anything… the model can read/write virtual files, search, and reason over your code."></textarea>
+      <button id="send-btn" onclick="send()">Send</button>
+    </div>
+  </div>
+
+  <!-- File pane -->
+  <div id="file-pane">
+    <div id="file-pane-header">
+      <span>virtual fs</span>
+      <button class="icon-btn" onclick="newFile()">+</button>
+    </div>
+    <div id="file-list"></div>
+  </div>
+</div>
+
+<!-- File editor modal -->
+<div id="file-modal">
+  <div id="file-modal-inner">
+    <div id="file-modal-header">
+      <input id="file-modal-path" type="text" placeholder="/path/to/file.py">
+      <button class="modal-btn danger" onclick="deleteFile()">delete</button>
+    </div>
+    <textarea id="file-modal-content" spellcheck="false"></textarea>
+    <div id="file-modal-footer">
+      <button class="modal-btn" onclick="closeFileModal()">cancel</button>
+      <button class="modal-btn primary" onclick="saveFile()">save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────
+const OLLAMA_URL = 'http://localhost:11434';
+const FS_PREFIX  = 'oclaw_fs:';
+const HIST_KEY   = 'oclaw_history';
+const SETTINGS_KEY = 'oclaw_settings';
+
+// ── State ─────────────────────────────────────────────────────────────────
+let messages = [];   // conversation messages sent to Ollama
+let busy = false;
+let currentEditPath = null;
+
+// ── Settings persistence ──────────────────────────────────────────────────
+function loadSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    if (s.model) {
+      const sel = document.getElementById('model-select');
+      const exists = Array.from(sel.options).some(o => o.value === s.model);
+      if (exists) {
+        sel.value = s.model;
+      } else {
+        sel.value = 'custom';
+        document.getElementById('model-custom').style.display = '';
+        document.getElementById('model-custom').value = s.model;
+      }
+    }
+  } catch {}
+}
+
+function saveSettings() {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ model: getModel() }));
+}
+
+function getModel() {
+  const sel = document.getElementById('model-select');
+  if (sel.value === 'custom') return document.getElementById('model-custom').value.trim() || 'qwen2.5-coder:7b';
+  return sel.value;
+}
+
+document.getElementById('model-select').addEventListener('change', e => {
+  const custom = document.getElementById('model-custom');
+  custom.style.display = e.target.value === 'custom' ? '' : 'none';
+  saveSettings();
+  checkHealth();
+});
+document.getElementById('model-custom').addEventListener('change', () => { saveSettings(); checkHealth(); });
+
+// ── History persistence ───────────────────────────────────────────────────
+function saveHistory() {
+  localStorage.setItem(HIST_KEY, JSON.stringify(messages));
+}
+function loadHistory() {
+  try {
+    messages = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+  } catch { messages = []; }
+}
+
+// ── Virtual filesystem (localStorage) ─────────────────────────────────────
+function fsKey(path) { return FS_PREFIX + path; }
+
+function fsWrite(path, content) {
+  localStorage.setItem(fsKey(path), content);
+  renderFileList();
+}
+function fsRead(path) {
+  const v = localStorage.getItem(fsKey(path));
+  return v;   // null if not found
+}
+function fsDelete(path) {
+  localStorage.removeItem(fsKey(path));
+  renderFileList();
+}
+function fsListAll() {
+  const paths = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(FS_PREFIX)) paths.push(k.slice(FS_PREFIX.length));
+  }
+  return paths.sort();
+}
+function fsGlob(pattern) {
+  // simple glob: * matches within segment, ** matches across
+  const re = new RegExp(
+    '^' + pattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*\*/g, '<<DOUBLE>>')
+      .replace(/\*/g, '[^/]*')
+      .replace(/<<DOUBLE>>/g, '.*') + '$'
+  );
+  return fsListAll().filter(p => re.test(p));
+}
+function fsGrep(pattern, pathFilter) {
+  const re = new RegExp(pattern, 'gm');
+  const results = [];
+  const files = pathFilter ? fsGlob(pathFilter) : fsListAll();
+  for (const path of files) {
+    const content = fsRead(path) || '';
+    const lines = content.split('\n');
+    lines.forEach((line, idx) => {
+      if (re.test(line)) results.push(`${path}:${idx+1}: ${line}`);
+      re.lastIndex = 0;
+    });
+  }
+  return results;
+}
+
+// ── Tool definitions (sent to model) ──────────────────────────────────────
+const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: 'Read a file from the virtual filesystem. Returns contents with line numbers.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path, e.g. /src/main.py' },
+          offset: { type: 'integer', description: 'Start line (1-indexed, optional)' },
+          limit:  { type: 'integer', description: 'Max lines to read (optional)' }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: 'Write (or overwrite) a file in the virtual filesystem.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path:    { type: 'string', description: 'File path' },
+          content: { type: 'string', description: 'Full file content' }
+        },
+        required: ['path', 'content']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'edit_file',
+      description: 'Replace an exact string in a file. old_string must match exactly. Use read_file first to confirm.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path:       { type: 'string', description: 'File path' },
+          old_string: { type: 'string', description: 'Exact text to replace' },
+          new_string: { type: 'string', description: 'Replacement text' }
+        },
+        required: ['path', 'old_string', 'new_string']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'glob',
+      description: 'List files matching a glob pattern in the virtual filesystem.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: "Glob pattern, e.g. '**/*.py' or 'src/*.js'" }
+        },
+        required: ['pattern']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'grep',
+      description: 'Search file contents for a regex pattern.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern:      { type: 'string', description: 'Regex pattern to search for' },
+          file_pattern: { type: 'string', description: "Optional glob to filter files, e.g. '*.py'" }
+        },
+        required: ['pattern']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_files',
+      description: 'List all files in the virtual filesystem.',
+      parameters: { type: 'object', properties: {}, required: [] }
+    }
+  }
+];
+
+// ── Tool executor ─────────────────────────────────────────────────────────
+function executeTool(name, args) {
+  try {
+    if (name === 'read_file') {
+      const content = fsRead(args.path);
+      if (content === null) return { ok: false, output: `File not found: ${args.path}` };
+      const lines = content.split('\n');
+      const start = args.offset ? Math.max(0, args.offset - 1) : 0;
+      const end   = args.limit  ? start + args.limit : lines.length;
+      const slice = lines.slice(start, end);
+      return { ok: true, output: slice.map((l, i) => `${start+i+1}\t${l}`).join('\n') || '(empty)' };
+    }
+    if (name === 'write_file') {
+      fsWrite(args.path, args.content);
+      const lines = (args.content || '').split('\n').length;
+      return { ok: true, output: `Wrote ${lines} line(s) to ${args.path}.` };
+    }
+    if (name === 'edit_file') {
+      const content = fsRead(args.path);
+      if (content === null) return { ok: false, output: `File not found: ${args.path}` };
+      const count = (content.split(args.old_string).length - 1);
+      if (count === 0) return { ok: false, output: `old_string not found in ${args.path}. Use read_file to verify.` };
+      if (count > 1)   return { ok: false, output: `old_string appears ${count} times — add more context to make it unique.` };
+      fsWrite(args.path, content.replace(args.old_string, args.new_string));
+      return { ok: true, output: `Edited ${args.path}.` };
+    }
+    if (name === 'glob') {
+      const matches = fsGlob(args.pattern);
+      return { ok: true, output: matches.length ? matches.join('\n') : '(no matches)' };
+    }
+    if (name === 'grep') {
+      const results = fsGrep(args.pattern, args.file_pattern);
+      return { ok: true, output: results.length ? results.join('\n') : '(no matches)' };
+    }
+    if (name === 'list_files') {
+      const files = fsListAll();
+      return { ok: true, output: files.length ? files.join('\n') : '(no files yet)' };
+    }
+    return { ok: false, output: `Unknown tool: ${name}` };
+  } catch (e) {
+    return { ok: false, output: String(e) };
+  }
+}
+
+// ── Ollama API ────────────────────────────────────────────────────────────
+async function ollamaChat(msgs, useTools = true) {
+  const body = {
+    model: getModel(),
+    messages: msgs,
+    stream: false,
+    options: { temperature: 0.2, num_predict: 4096 }
+  };
+  if (useTools) body.tools = TOOLS;
+
+  const resp = await fetch(`${OLLAMA_URL}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!resp.ok) throw new Error(`Ollama HTTP ${resp.status}`);
+  return resp.json();
+}
+
+async function checkHealth() {
+  const dot  = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  dot.className = '';
+  text.textContent = 'checking…';
+  try {
+    const resp = await fetch(`${OLLAMA_URL}/api/tags`);
+    const data = await resp.json();
+    const models = (data.models || []).map(m => m.name);
+    const model  = getModel();
+    const base   = model.split(':')[0];
+    const found  = models.some(m => m.startsWith(base));
+    if (found) {
+      dot.className = 'ok';
+      text.textContent = `${model} ready`;
+    } else {
+      dot.className = 'fail';
+      text.textContent = models.length
+        ? `${model} not found — run: ollama pull ${model}`
+        : `no models — run: ollama pull ${model}`;
+    }
+  } catch {
+    dot.className = 'fail';
+    text.textContent = 'Ollama not reachable — start with: ollama serve';
+  }
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────
+function ts() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function appendMsg(role, text) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg';
+  wrap.innerHTML = `
+    <div class="msg-header">
+      <span class="role ${role}">${role}</span>
+      <span class="ts">${ts()}</span>
+    </div>
+    <div class="msg-body ${role}">${escHtml(text)}</div>`;
+  document.getElementById('messages').appendChild(wrap);
+  scrollBottom();
+  return wrap;
+}
+
+function appendToolBlock(name, argsObj) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tool-block';
+  const argsStr = JSON.stringify(argsObj, null, 2);
+  wrap.innerHTML = `
+    <div class="tool-header" onclick="this.nextElementSibling.classList.toggle('open')">
+      <span>⚙</span>
+      <span class="tool-name">${escHtml(name)}</span>
+      <span class="tool-status wait" data-status>running…</span>
+    </div>
+    <div class="tool-body">
+      <div class="tool-args">${escHtml(argsStr)}</div>
+      <div class="tool-out" data-out></div>
+    </div>`;
+  document.getElementById('messages').appendChild(wrap);
+  scrollBottom();
+  return wrap;
+}
+
+function finishToolBlock(block, result) {
+  const statusEl = block.querySelector('[data-status]');
+  const outEl    = block.querySelector('[data-out]');
+  statusEl.textContent = result.ok ? '✓ ok' : '✗ error';
+  statusEl.className   = 'tool-status ' + (result.ok ? 'ok' : 'err');
+  outEl.textContent    = result.output;
+  if (!result.ok) outEl.classList.add('err');
+  // auto-open on error
+  if (!result.ok) block.querySelector('.tool-body').classList.add('open');
+  scrollBottom();
+}
+
+function showTyping() {
+  const el = document.createElement('div');
+  el.id = 'typing';
+  el.className = 'typing';
+  el.innerHTML = '<span></span><span></span><span></span>';
+  document.getElementById('messages').appendChild(el);
+  scrollBottom();
+  return el;
+}
+
+function scrollBottom() {
+  const el = document.getElementById('messages');
+  el.scrollTop = el.scrollHeight;
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function setBusy(b) {
+  busy = b;
+  document.getElementById('send-btn').disabled = b;
+  document.getElementById('prompt').disabled = b;
+}
+
+function clearHistory() {
+  if (!confirm('Clear conversation history?')) return;
+  messages = [];
+  saveHistory();
+  document.getElementById('messages').innerHTML = '';
+  initSystemPrompt();
+}
+
+// ── System prompt ─────────────────────────────────────────────────────────
+function initSystemPrompt() {
+  const files = fsListAll();
+  const fileList = files.length ? files.join('\n') : '(none yet — create files with the + button or ask the model to write_file)';
+  const sys = {
+    role: 'system',
+    content: `You are an expert software engineering assistant running in an offline browser environment.
+
+You have access to a virtual filesystem stored in localStorage. You can read, write, and edit files.
+Current files:\n${fileList}
+
+Available tools: read_file, write_file, edit_file, glob, grep, list_files.
+Note: bash execution is not available in the browser. For shell operations, describe the commands and write files instead.
+
+Be concise and precise. Use tools to inspect and modify files rather than guessing.`
+  };
+  messages = [sys];
+  saveHistory();
+}
+
+// ── Send message ──────────────────────────────────────────────────────────
+async function send() {
+  if (busy) return;
+  const ta = document.getElementById('prompt');
+  const text = ta.value.trim();
+  if (!text) return;
+
+  ta.value = '';
+  ta.style.height = '';
+  setBusy(true);
+
+  appendMsg('user', text);
+  messages.push({ role: 'user', content: text });
+  saveHistory();
+
+  const typing = showTyping();
+
+  try {
+    let finalText = '';
+
+    for (let iter = 0; iter < 20; iter++) {
+      const data = await ollamaChat(messages, true);
+      const msg  = data.message || {};
+      const toolCalls = msg.tool_calls || [];
+      const content   = msg.content || '';
+
+      if (!toolCalls.length) {
+        // Final response
+        finalText = content;
+        break;
+      }
+
+      // Model wants tools — record assistant message
+      messages.push({ role: 'assistant', content, tool_calls: toolCalls });
+
+      // Execute each tool
+      for (const tc of toolCalls) {
+        const fn   = tc.function || tc;
+        const name = fn.name;
+        let args   = fn.arguments || {};
+        if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
+
+        const block  = appendToolBlock(name, args);
+        const result = executeTool(name, args);
+        finishToolBlock(block, result);
+
+        messages.push({
+          role: 'tool',
+          name,
+          content: result.ok ? result.output : `ERROR: ${result.output}`
+        });
+      }
+
+      saveHistory();
+    }
+
+    typing.remove();
+    if (finalText) {
+      appendMsg('assistant', finalText);
+      messages.push({ role: 'assistant', content: finalText });
+      saveHistory();
+    }
+
+  } catch (err) {
+    typing.remove();
+    appendMsg('system', `Error: ${err.message}\n\nMake sure Ollama is running and OLLAMA_ORIGINS is set:\nOLLAMA_ORIGINS="*" ollama serve`);
+  }
+
+  setBusy(false);
+}
+
+// ── Auto-resize textarea ──────────────────────────────────────────────────
+document.getElementById('prompt').addEventListener('input', function() {
+  this.style.height = '';
+  this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+});
+document.getElementById('prompt').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+// ── File pane ─────────────────────────────────────────────────────────────
+function renderFileList() {
+  const list = document.getElementById('file-list');
+  const files = fsListAll();
+  list.innerHTML = '';
+  if (!files.length) {
+    list.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:11px;">No files yet</div>';
+    return;
+  }
+  for (const path of files) {
+    const item = document.createElement('div');
+    item.className = 'file-item';
+    const ext = path.split('.').pop() || '';
+    const icon = { py:'🐍', js:'📜', ts:'📘', html:'🌐', css:'🎨', json:'📋', md:'📝', sh:'⚡', txt:'📄' }[ext] || '📄';
+    item.innerHTML = `<span class="file-icon">${icon}</span><span>${escHtml(path)}</span>`;
+    item.onclick = () => openFileModal(path);
+    list.appendChild(item);
+  }
+}
+
+// ── File editor modal ─────────────────────────────────────────────────────
+function newFile() {
+  currentEditPath = null;
+  document.getElementById('file-modal-path').value = '';
+  document.getElementById('file-modal-content').value = '';
+  document.getElementById('file-modal').classList.add('open');
+  document.getElementById('file-modal-path').focus();
+}
+
+function openFileModal(path) {
+  currentEditPath = path;
+  document.getElementById('file-modal-path').value = path;
+  document.getElementById('file-modal-content').value = fsRead(path) || '';
+  document.getElementById('file-modal').classList.add('open');
+}
+
+function saveFile() {
+  const path    = document.getElementById('file-modal-path').value.trim();
+  const content = document.getElementById('file-modal-content').value;
+  if (!path) { alert('Enter a file path.'); return; }
+  if (currentEditPath && currentEditPath !== path) {
+    fsDelete(currentEditPath);
+  }
+  fsWrite(path, content);
+  currentEditPath = path;
+  closeFileModal();
+  // refresh system prompt with updated file list
+  updateSystemPromptFiles();
+}
+
+function deleteFile() {
+  if (!currentEditPath) return;
+  if (!confirm(`Delete ${currentEditPath}?`)) return;
+  fsDelete(currentEditPath);
+  closeFileModal();
+  updateSystemPromptFiles();
+}
+
+function closeFileModal() {
+  document.getElementById('file-modal').classList.remove('open');
+}
+
+document.getElementById('file-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('file-modal')) closeFileModal();
+});
+
+function updateSystemPromptFiles() {
+  if (messages.length && messages[0].role === 'system') {
+    const files = fsListAll();
+    const fileList = files.length ? files.join('\n') : '(none yet)';
+    messages[0].content = messages[0].content.replace(
+      /Current files:\n[\s\S]*?\n\nAvailable tools/,
+      `Current files:\n${fileList}\n\nAvailable tools`
+    );
+    saveHistory();
+  }
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+loadSettings();
+loadHistory();
+if (!messages.length) initSystemPrompt();
+
+// Restore chat UI from history (skip system message)
+for (const m of messages) {
+  if (m.role === 'system') continue;
+  if (m.role === 'user')      appendMsg('user',      m.content || '');
+  if (m.role === 'assistant' && m.content) appendMsg('assistant', m.content);
+  if (m.role === 'tool') {
+    // show as collapsed tool block in history
+    const block = appendToolBlock(m.name || 'tool', {});
+    finishToolBlock(block, { ok: !m.content?.startsWith('ERROR:'), output: m.content || '' });
+  }
+}
+
+renderFileList();
+checkHealth();
+
+// Periodic health re-check
+setInterval(checkHealth, 30_000);
+</script>
+</body>
+</html>
